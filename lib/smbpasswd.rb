@@ -15,11 +15,11 @@ class Smbpasswd
   def run!
     execstr = 'smbpasswd'
     if Process.uid != 0
-      $stderr.puts "Warning: operation requires root but not run as root; attempting to sudo"
       @args.unshift execstr
       execstr = "sudo"
     end
-    stdout, stderr, status = Open3.capture3("#{execstr} #{@args.join(' ')}", 
+    # Ignore stdout for now
+    _, stderr, status = Open3.capture3(execstr, *@args,
                                             stdin_data: @pstdin.map{|x|x+"\n"}.join(''))
 
     if status != 0
@@ -47,7 +47,14 @@ class Smbpasswd
     U: :username,
     w: :ldap_password,
   }
-  require_root = [:a, :x, :d, :e, :n, :m, :i]
+  single_arg_and_password_flags = {
+    s: :change, # Yeah, this is kinda an abuse of my metaprogramming
+                # Technically s is silent, but 'sudo smbpasswd -s test'
+                # will let you change the user's password
+    U: :username,
+    a: :add
+  }
+  require_root = [:a, :x, :d, :e, :n, :m, :i, :U]
 
   no_arg_flags.each do |k,v|
     class_eval <<-EOM
@@ -71,16 +78,22 @@ class Smbpasswd
       end
     EOM
   end
+  single_arg_and_password_flags.each do |k,v|
+    class_eval <<-EOM
+      def #{v.to_s}(arg, password)
+        @args << "-s" << "-#{k.to_s}" << arg
+        2.times{@pstdin << password}
+        if #{require_root.include? k}
+          use_root
+        end
+        self
+      end
+    EOM
+  end
 
   def ldap_password_stdin(pass)
     @args << '-w'
     @pstdin << pass
-    self
-  end
-
-  def add(user, password)
-    @args << '-s' << '-a' << user && use_root
-    2.times{@pstdin << password}
     self
   end
 end
